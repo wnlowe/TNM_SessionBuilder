@@ -36,20 +36,34 @@ hidden = [
     'scipy',
     'scipy.signal',
     'torch',
-    'torchaudio',
     'numba',
     'llvmlite',
+    'jaraco',
+    'jaraco.text',
+    'jaraco.functools',
+    'jaraco.context',
+    'jaraco.collections',
 ]
 
 hidden += collect_submodules('whisper')
 hidden += collect_submodules('torch')
+hidden += collect_submodules('jaraco')
 
 # ── Analysis ──────────────────────────────────────────────────────────────────
+
+# Include the ffmpeg binary copied to assets/ by CI (or a local build script).
+# It lands in the bundle root so sys._MEIPASS (prepended to PATH in main.py)
+# makes it findable by Whisper's subprocess call.
+_ffmpeg_binaries = []
+if sys.platform == 'win32' and os.path.exists('assets/ffmpeg.exe'):
+    _ffmpeg_binaries = [('assets/ffmpeg.exe', '.')]
+elif os.path.exists('assets/ffmpeg'):
+    _ffmpeg_binaries = [('assets/ffmpeg', '.')]
 
 a = Analysis(
     ['main.py'],
     pathex=['.'],
-    binaries=[],
+    binaries=_ffmpeg_binaries,
     datas=all_datas,
     hiddenimports=hidden,
     hookspath=[],
@@ -90,8 +104,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # Windows only — remove if building on Mac:
-    icon='assets/icon.ico' if sys.platform == 'win32' else None,
+    icon='assets/icon.ico' if (sys.platform == 'win32' and os.path.exists('assets/icon.ico')) else None,
 )
 
 coll = COLLECT(
@@ -111,7 +124,7 @@ if sys.platform == 'darwin':
     app = BUNDLE(
         coll,
         name='ReaperSessionGenerator.app',
-        icon='assets/icon.icns',   # remove this line if you have no icon file
+        icon='assets/icon.icns' if os.path.exists('assets/icon.icns') else None,
         bundle_identifier='com.yourname.reapersessiongenerator',
         info_plist={
             'NSHighResolutionCapable': True,

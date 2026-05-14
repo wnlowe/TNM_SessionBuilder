@@ -27,26 +27,15 @@ jobs:
         with:
           python-version: '3.12'
 
-      # ── Install LLVM (needed by llvmlite / numba / whisper) ──────────────────
-      - name: Install LLVM via Homebrew
-        run: |
-          brew install llvm@14
-          echo "LLVM_CONFIG=$(brew --prefix llvm@14)/bin/llvm-config" >> $GITHUB_ENV
-          echo "CMAKE_PREFIX_PATH=$(brew --prefix llvm@14)" >> $GITHUB_ENV
-
       # ── Install ffmpeg (bundled into the app) ────────────────────────────────
       - name: Install ffmpeg
         run: brew install ffmpeg
 
       # ── Python dependencies ──────────────────────────────────────────────────
+      # llvmlite/numba are pulled in by openai-whisper; pip uses pre-built
+      # wheels on macOS so no system LLVM install is needed.
       - name: Upgrade pip
         run: pip install --upgrade pip setuptools wheel
-
-      - name: Install llvmlite (must point at LLVM 14)
-        run: |
-          CMAKE_PREFIX_PATH=$(brew --prefix llvm@14) \
-          LLVM_CONFIG=$(brew --prefix llvm@14)/bin/llvm-config \
-          pip install llvmlite
 
       - name: Install all requirements
         run: pip install -r requirements.txt
