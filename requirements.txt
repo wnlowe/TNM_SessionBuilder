@@ -3,3 +3,5 @@ openai-whisper
 pandas
 openpyxl
 soundfile
+pygame
+pyinstaller>=6.0

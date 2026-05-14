@@ -1,0 +1,165 @@
+name: Build Mac & Windows
+
+# ── Triggers ──────────────────────────────────────────────────────────────────
+# Runs automatically on version tags (e.g. v1.0.0)
+# Also runnable manually from the Actions tab in GitHub
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:       # allows manual trigger from GitHub UI
+
+jobs:
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # macOS Build
+  # ────────────────────────────────────────────────────────────────────────────
+  build-mac:
+    name: Build macOS App
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # ── Install LLVM (needed by llvmlite / numba / whisper) ──────────────────
+      - name: Install LLVM via Homebrew
+        run: |
+          brew install llvm@14
+          echo "LLVM_CONFIG=$(brew --prefix llvm@14)/bin/llvm-config" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix llvm@14)" >> $GITHUB_ENV
+
+      # ── Install ffmpeg (bundled into the app) ────────────────────────────────
+      - name: Install ffmpeg
+        run: brew install ffmpeg
+
+      # ── Python dependencies ──────────────────────────────────────────────────
+      - name: Upgrade pip
+        run: pip install --upgrade pip setuptools wheel
+
+      - name: Install llvmlite (must point at LLVM 14)
+        run: |
+          CMAKE_PREFIX_PATH=$(brew --prefix llvm@14) \
+          LLVM_CONFIG=$(brew --prefix llvm@14)/bin/llvm-config \
+          pip install llvmlite
+
+      - name: Install all requirements
+        run: pip install -r requirements.txt
+
+      # ── Bundle ffmpeg binary into assets/ so PyInstaller can include it ──────
+      - name: Copy ffmpeg to assets
+        run: |
+          mkdir -p assets
+          cp $(which ffmpeg) assets/ffmpeg
+
+      # ── Run PyInstaller ──────────────────────────────────────────────────────
+      - name: Build with PyInstaller
+        run: pyinstaller build.spec --clean --noconfirm
+
+      # ── Zip the .app bundle ──────────────────────────────────────────────────
+      - name: Zip app bundle
+        run: |
+          cd dist
+          zip -r ReaperSessionGenerator-mac.zip ReaperSessionGenerator.app
+
+      # ── Upload as artifact ───────────────────────────────────────────────────
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ReaperSessionGenerator-mac
+          path: dist/ReaperSessionGenerator-mac.zip
+          retention-days: 30
+
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Windows Build
+  # ────────────────────────────────────────────────────────────────────────────
+  build-windows:
+    name: Build Windows EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # ── Install ffmpeg via Chocolatey ────────────────────────────────────────
+      - name: Install ffmpeg
+        run: choco install ffmpeg -y
+
+      # ── Python dependencies ──────────────────────────────────────────────────
+      - name: Upgrade pip
+        run: pip install --upgrade pip setuptools wheel
+
+      - name: Install all requirements
+        run: pip install -r requirements.txt
+
+      # ── Copy ffmpeg.exe to assets/ for bundling ──────────────────────────────
+      - name: Copy ffmpeg to assets
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path assets
+          $ffmpegPath = (Get-Command ffmpeg).Source
+          Copy-Item $ffmpegPath assets\ffmpeg.exe
+
+      # ── Run PyInstaller ──────────────────────────────────────────────────────
+      - name: Build with PyInstaller
+        run: pyinstaller build.spec --clean --noconfirm
+
+      # ── Zip the output folder ────────────────────────────────────────────────
+      - name: Zip output
+        shell: powershell
+        run: |
+          Compress-Archive -Path dist\ReaperSessionGenerator\* `
+            -DestinationPath dist\ReaperSessionGenerator-windows.zip
+
+      # ── Upload as artifact ───────────────────────────────────────────────────
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ReaperSessionGenerator-windows
+          path: dist\ReaperSessionGenerator-windows.zip
+          retention-days: 30
+
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # (Optional) Create a GitHub Release with both builds attached
+  # Only runs when triggered by a tag push
+  # ────────────────────────────────────────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    needs: [build-mac, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download Mac artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ReaperSessionGenerator-mac
+          path: release/
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ReaperSessionGenerator-windows
+          path: release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/ReaperSessionGenerator-mac.zip
+            release/ReaperSessionGenerator-windows.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
