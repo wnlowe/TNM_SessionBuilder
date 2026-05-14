@@ -37,7 +37,13 @@ for _pkg in ('jaraco.text', 'jaraco.functools', 'jaraco.context', 'jaraco.collec
     jaraco_binaries += _b
     jaraco_hidden += _h
 
-all_datas = whisper_datas + customtkinter_datas + jaraco_datas + openpyxl_datas + tiktoken_datas
+icon_datas = []
+if os.path.exists('assets/icon.ico'):
+    icon_datas.append(('assets/icon.ico', 'assets'))
+if os.path.exists('assets/icon.png'):
+    icon_datas.append(('assets/icon.png', 'assets'))
+
+all_datas = whisper_datas + customtkinter_datas + jaraco_datas + openpyxl_datas + tiktoken_datas + icon_datas
 
 # ── Hidden imports that PyInstaller can't auto-detect ─────────────────────────
 

@@ -11,6 +11,7 @@ Tabs:
 
 from __future__ import annotations
 import os
+import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -53,6 +54,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Reaper Session Generator")
+        self._set_icon()
         self.geometry("1280x860")
         self.configure(fg_color=CLR_BG)
         self.minsize(1000, 680)
@@ -110,6 +112,18 @@ class App(ctk.CTk):
 
         self._build_header()
         self._build_tabs()
+
+    def _set_icon(self):
+        base = sys._MEIPASS if getattr(sys, 'frozen', False) else \
+               os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if sys.platform == 'win32':
+            ico = os.path.join(base, 'assets', 'icon.ico')
+            if os.path.exists(ico):
+                self.iconbitmap(ico)
+        else:
+            png = os.path.join(base, 'assets', 'icon.png')
+            if os.path.exists(png):
+                self.iconphoto(True, tk.PhotoImage(file=png))
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Header
