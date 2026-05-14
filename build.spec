@@ -12,12 +12,22 @@ block_cipher = None
 
 whisper_datas = collect_data_files('whisper')
 customtkinter_datas = collect_data_files('customtkinter')
+# openpyxl bundles XML schemas/templates that pandas.read_excel loads at runtime.
+openpyxl_datas = collect_data_files('openpyxl')
+# tiktoken ships BPE vocab files loaded by the tokenizer at runtime.
+tiktoken_datas = collect_data_files('tiktoken')
 
-# jaraco is a namespace package; collect_all is required to capture its
-# metadata so pkg_resources can locate it at runtime in the frozen bundle.
-jaraco_datas, jaraco_binaries, jaraco_hidden = collect_all('jaraco')
+# jaraco is a PEP 420 namespace package with no top-level __init__.py,
+# so collect_all('jaraco') collects nothing. Each subpackage must be
+# collected individually so pkg_resources can find them at runtime.
+jaraco_datas, jaraco_binaries, jaraco_hidden = [], [], []
+for _pkg in ('jaraco.text', 'jaraco.functools', 'jaraco.context', 'jaraco.collections'):
+    _d, _b, _h = collect_all(_pkg)
+    jaraco_datas += _d
+    jaraco_binaries += _b
+    jaraco_hidden += _h
 
-all_datas = whisper_datas + customtkinter_datas + jaraco_datas
+all_datas = whisper_datas + customtkinter_datas + jaraco_datas + openpyxl_datas + tiktoken_datas
 
 # ── Hidden imports that PyInstaller can't auto-detect ─────────────────────────
 
@@ -40,13 +50,11 @@ hidden = [
     'scipy',
     'scipy.signal',
     'torch',
+    'tiktoken',
+    'tiktoken_ext',
+    'tiktoken_ext.openai_public',
     'numba',
     'llvmlite',
-    'jaraco',
-    'jaraco.text',
-    'jaraco.functools',
-    'jaraco.context',
-    'jaraco.collections',
 ]
 
 hidden += collect_submodules('whisper')
