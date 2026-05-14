@@ -65,10 +65,21 @@ hidden = [
     'tiktoken_ext.openai_public',
     'numba',
     'llvmlite',
+    # jaraco subpackages must be listed explicitly — collect_all only collects
+    # their children, not the packages themselves.
+    'jaraco',
+    'jaraco.text',
+    'jaraco.functools',
+    'jaraco.context',
+    'jaraco.collections',
 ]
 
 hidden += collect_submodules('whisper')
 hidden += collect_submodules('torch')
+hidden += collect_submodules('jaraco.text')
+hidden += collect_submodules('jaraco.functools')
+hidden += collect_submodules('jaraco.context')
+hidden += collect_submodules('jaraco.collections')
 hidden += jaraco_hidden
 
 # ── Analysis ──────────────────────────────────────────────────────────────────

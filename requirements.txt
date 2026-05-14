@@ -5,3 +5,10 @@ openpyxl
 soundfile
 pygame
 pyinstaller>=6.0
+# jaraco packages are standalone deps of modern setuptools (>=65).
+# pkg_resources/__init__.py imports them directly at startup, so they must
+# be installed so PyInstaller can find and bundle them.
+jaraco.text
+jaraco.functools
+jaraco.context
+jaraco.collections
