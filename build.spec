@@ -72,6 +72,8 @@ hidden = [
     'jaraco.functools',
     'jaraco.context',
     'jaraco.collections',
+    'platformdirs',
+    'more_itertools',
 ]
 
 hidden += collect_submodules('whisper')
@@ -101,7 +103,7 @@ a = Analysis(
     hiddenimports=hidden,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['hooks/rthook_pkgres_preload.py'],
     excludes=[
         'matplotlib',
         'IPython',

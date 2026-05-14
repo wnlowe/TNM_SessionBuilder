@@ -12,3 +12,5 @@ jaraco.text
 jaraco.functools
 jaraco.context
 jaraco.collections
+platformdirs
+more-itertools
