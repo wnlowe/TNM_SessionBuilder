@@ -14,6 +14,8 @@ build/
 *.spec.bak
 build/
 dist/
+ReaperSessionGenerator-windows/
+ReaperSessionGenerator-mac/
 
 # Virtual environments
 .venv/
