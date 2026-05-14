@@ -1,13 +1,24 @@
 name: Build Mac & Windows
 
 # ── Triggers ──────────────────────────────────────────────────────────────────
-# Runs automatically on version tags (e.g. v1.0.0)
-# Also runnable manually from the Actions tab in GitHub
+# Runs automatically on version tags (e.g. v1.0.0).
+# Can also be triggered manually from the Actions tab; use the "platform" input
+# to build only mac, only windows, or both (default).
 on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:       # allows manual trigger from GitHub UI
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform to build'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - mac
+          - windows
 
 jobs:
 
@@ -17,6 +28,7 @@ jobs:
   build-mac:
     name: Build macOS App
     runs-on: macos-latest
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'mac'
 
     steps:
       - name: Checkout code
@@ -71,6 +83,7 @@ jobs:
   build-windows:
     name: Build Windows EXE
     runs-on: windows-latest
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows'
 
     steps:
       - name: Checkout code

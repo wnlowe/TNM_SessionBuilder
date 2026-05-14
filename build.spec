@@ -4,7 +4,7 @@
 
 import sys
 import os
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_all
 
 block_cipher = None
 
@@ -13,7 +13,11 @@ block_cipher = None
 whisper_datas = collect_data_files('whisper')
 customtkinter_datas = collect_data_files('customtkinter')
 
-all_datas = whisper_datas + customtkinter_datas
+# jaraco is a namespace package; collect_all is required to capture its
+# metadata so pkg_resources can locate it at runtime in the frozen bundle.
+jaraco_datas, jaraco_binaries, jaraco_hidden = collect_all('jaraco')
+
+all_datas = whisper_datas + customtkinter_datas + jaraco_datas
 
 # ── Hidden imports that PyInstaller can't auto-detect ─────────────────────────
 
@@ -47,7 +51,7 @@ hidden = [
 
 hidden += collect_submodules('whisper')
 hidden += collect_submodules('torch')
-hidden += collect_submodules('jaraco')
+hidden += jaraco_hidden
 
 # ── Analysis ──────────────────────────────────────────────────────────────────
 
@@ -63,7 +67,7 @@ elif os.path.exists('assets/ffmpeg'):
 a = Analysis(
     ['main.py'],
     pathex=['.'],
-    binaries=_ffmpeg_binaries,
+    binaries=_ffmpeg_binaries + jaraco_binaries,
     datas=all_datas,
     hiddenimports=hidden,
     hookspath=[],
