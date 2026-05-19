@@ -32,6 +32,7 @@ class AAFClip:
     source_out:   float  # file-local out-point (seconds)
     timeline_pos: float  # session-timeline position (seconds)
     clip_name:    str = ""  # MasterMob name from AAF (Pro Tools clip/region name)
+    source_hint:  str = ""  # original URI/path from AAF when source_file could not be resolved
 
     @property
     def duration(self) -> float:
@@ -124,6 +125,7 @@ def parse_aaf(path: str) -> AAFSession:
                         source_out   = source_out,
                         timeline_pos = timeline_pos,
                         clip_name    = _get_clip_name(source_clip),
+                        source_hint  = unresolved,
                     )
                     clips.append(clip)
 
@@ -137,6 +139,57 @@ def parse_aaf(path: str) -> AAFSession:
                 ))
 
     return AAFSession(tracks=tracks, source_path=path, missing_media=missing)
+
+
+def resolve_missing_media(session: AAFSession, search_dir: str) -> int:
+    """
+    Try to resolve unresolved clips by searching search_dir and its immediate
+    subdirectories for files whose basename matches the stored source_hint.
+
+    Updates clip.source_file in place and rebuilds session.missing_media.
+    Returns the number of clips newly resolved.
+    """
+    if not session.missing_media:
+        return 0
+
+    # Build a basename → absolute path index for the chosen directory tree
+    file_index: dict[str, str] = {}
+    try:
+        for entry in os.scandir(search_dir):
+            if entry.is_file():
+                file_index.setdefault(entry.name, entry.path)
+            elif entry.is_dir():
+                try:
+                    for sub in os.scandir(entry.path):
+                        if sub.is_file():
+                            file_index.setdefault(sub.name, sub.path)
+                except OSError:
+                    pass
+    except OSError:
+        return 0
+
+    resolved_count = 0
+    for track in session.tracks:
+        for clip in track.clips:
+            if clip.source_file or not clip.source_hint:
+                continue
+            basename = os.path.basename(clip.source_hint)
+            if basename in file_index:
+                clip.source_file = file_index[basename]
+                clip.source_hint = ""
+                resolved_count += 1
+
+    # Rebuild missing_media from clips that are still unresolved
+    still_missing: list[str] = []
+    seen: set[str] = set()
+    for track in session.tracks:
+        for clip in track.clips:
+            if not clip.source_file and clip.source_hint and clip.source_hint not in seen:
+                still_missing.append(clip.source_hint)
+                seen.add(clip.source_hint)
+    session.missing_media = still_missing
+
+    return resolved_count
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -267,11 +320,20 @@ def _resolve_source_file(source_clip, aaf_dir: str, aaf_file) -> tuple[str, str]
                 path = _uri_to_path(uri)
                 if os.path.isfile(path):
                     return path, ""
-                # Try just the basename relative to the AAF directory
-                basename  = os.path.basename(path)
+                basename = os.path.basename(path)
+                # Try AAF directory itself
                 candidate = os.path.join(aaf_dir, basename)
                 if os.path.isfile(candidate):
                     return candidate, ""
+                # Try one level of subdirectories (covers Pro Tools "Audio Files/" structure)
+                try:
+                    for entry in os.scandir(aaf_dir):
+                        if entry.is_dir():
+                            candidate = os.path.join(entry.path, basename)
+                            if os.path.isfile(candidate):
+                                return candidate, ""
+                except OSError:
+                    pass
                 # Return the unresolved hint so GUI can warn
                 return "", path or uri
             except Exception:

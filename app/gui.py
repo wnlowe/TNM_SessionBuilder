@@ -24,7 +24,7 @@ from .aligner import align_all, AlignmentResult
 from .audio_player import AudioPlayer
 from .waveform_widget import WaveformWidget
 from .session_builder import build_session
-from .aaf_parser import parse_aaf, AAFSession, AAFClip
+from .aaf_parser import parse_aaf, resolve_missing_media, AAFSession, AAFClip
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -305,13 +305,9 @@ class App(ctk.CTk):
                                              "416":  g["416_path"]}
                                for g in self.display_groups}
 
-        # Warn about missing media
+        # Offer to locate missing media
         if self.aaf_session.missing_media:
-            msg = "Some media files could not be resolved:\n" + \
-                  "\n".join(f"  • {p}" for p in self.aaf_session.missing_media[:10])
-            if len(self.aaf_session.missing_media) > 10:
-                msg += f"\n  … and {len(self.aaf_session.missing_media) - 10} more"
-            messagebox.showwarning("Missing Media", msg)
+            self._try_locate_missing_media()
 
         self.transcripts      = {}
         self.word_data        = {}
@@ -325,6 +321,45 @@ class App(ctk.CTk):
         self._refresh_tracks_tab()
         self._refresh_review_tab()
         self.tabs.set("2 · Tracks")
+
+    def _try_locate_missing_media(self) -> None:
+        """
+        Called after parse_aaf when missing_media is non-empty.
+        Shows the unresolved paths and offers the user a chance to point to
+        the audio files folder so we can re-resolve by basename.
+        """
+        n = len(self.aaf_session.missing_media)
+        sample = "\n".join(f"  • {os.path.basename(p)}"
+                           for p in self.aaf_session.missing_media[:8])
+        if n > 8:
+            sample += f"\n  … and {n - 8} more"
+        want = messagebox.askyesno(
+            "Missing Media",
+            f"{n} audio file(s) could not be found at the paths stored in the AAF:\n\n"
+            f"{sample}\n\n"
+            "Would you like to locate the folder containing the audio files?",
+        )
+        if not want:
+            return
+        folder = filedialog.askdirectory(title="Select Audio Files Folder")
+        if not folder:
+            return
+        resolved = resolve_missing_media(self.aaf_session, folder)
+        if self.aaf_session.missing_media:
+            still = len(self.aaf_session.missing_media)
+            messagebox.showwarning(
+                "Still Missing",
+                f"Resolved {resolved} file(s), but {still} could not be found in that folder:\n\n"
+                + "\n".join(f"  • {os.path.basename(p)}"
+                            for p in self.aaf_session.missing_media[:8])
+                + (f"\n  … and {still - 8} more" if still > 8 else ""),
+            )
+        # Rebuild display_groups now that more clips may have source_file populated
+        self.display_groups = self._build_display_groups_from_aaf()
+        self.file_groups    = {g["index"]: {"4060": g["4060_path"],
+                                             "4061": g["4061_path"],
+                                             "416":  g["416_path"]}
+                               for g in self.display_groups}
 
     def _build_display_groups_from_aaf(self) -> List[Dict]:
         """

@@ -24,7 +24,8 @@
       "Bash(find \"/c/ProgramData/chocolatey/lib\" -name \"ffmpeg.exe\" 2>/dev/null | head -5)",
       "Read(//c/ProgramData/chocolatey/lib/**)",
       "Bash(py -3.12 -c \"import app.aaf_parser; import app.session_builder; import app.rpp_writer; print\\('OK'\\)\")",
-      "Bash(py -3.12 -c \"import app.session_builder; print\\('OK'\\)\")"
+      "Bash(py -3.12 -c \"import app.session_builder; print\\('OK'\\)\")",
+      "Bash(gh run *)"
     ]
   }
 }
