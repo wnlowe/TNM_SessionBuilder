@@ -141,10 +141,28 @@ def parse_aaf(path: str) -> AAFSession:
     return AAFSession(tracks=tracks, source_path=path, missing_media=missing)
 
 
+def _hint_basename(hint: str) -> str:
+    """
+    Extract just the filename from a source_hint, which may be:
+      - a POSIX absolute path   /Volumes/Drive/Audio Files/clip.wav
+      - a Windows absolute path C:\path\to\clip.wav  or  C:/path/to/clip.wav
+      - a raw file:// URI that _uri_to_path didn't decode (rare)
+    """
+    # Strip any residual file:// scheme before splitting
+    if hint.lower().startswith("file://"):
+        try:
+            hint = urllib.parse.unquote(urllib.parse.urlparse(hint).path)
+        except Exception:
+            pass
+    # Normalise to forward slashes so rsplit works on both Windows paths and POSIX
+    normalised = hint.replace("\\", "/").rstrip("/")
+    return normalised.rsplit("/", 1)[-1]
+
+
 def resolve_missing_media(session: AAFSession, search_dir: str) -> int:
     """
-    Try to resolve unresolved clips by searching search_dir and its immediate
-    subdirectories for files whose basename matches the stored source_hint.
+    Try to resolve unresolved clips by searching the entire search_dir tree for
+    files whose basename matches the stored source_hint.
 
     Updates clip.source_file in place and rebuilds session.missing_media.
     Returns the number of clips newly resolved.
@@ -152,19 +170,15 @@ def resolve_missing_media(session: AAFSession, search_dir: str) -> int:
     if not session.missing_media:
         return 0
 
-    # Build a basename → absolute path index for the chosen directory tree
+    # Build basename → absolute path index from the full directory tree
     file_index: dict[str, str] = {}
+    file_index_lower: dict[str, str] = {}  # case-insensitive fallback
     try:
-        for entry in os.scandir(search_dir):
-            if entry.is_file():
-                file_index.setdefault(entry.name, entry.path)
-            elif entry.is_dir():
-                try:
-                    for sub in os.scandir(entry.path):
-                        if sub.is_file():
-                            file_index.setdefault(sub.name, sub.path)
-                except OSError:
-                    pass
+        for dirpath, _dirs, filenames in os.walk(search_dir):
+            for name in filenames:
+                full = os.path.join(dirpath, name)
+                file_index.setdefault(name, full)
+                file_index_lower.setdefault(name.lower(), full)
     except OSError:
         return 0
 
@@ -173,9 +187,12 @@ def resolve_missing_media(session: AAFSession, search_dir: str) -> int:
         for clip in track.clips:
             if clip.source_file or not clip.source_hint:
                 continue
-            basename = os.path.basename(clip.source_hint)
-            if basename in file_index:
-                clip.source_file = file_index[basename]
+            basename = _hint_basename(clip.source_hint)
+            if not basename:
+                continue
+            found = file_index.get(basename) or file_index_lower.get(basename.lower())
+            if found:
+                clip.source_file = found
                 clip.source_hint = ""
                 resolved_count += 1
 
@@ -320,7 +337,9 @@ def _resolve_source_file(source_clip, aaf_dir: str, aaf_file) -> tuple[str, str]
                 path = _uri_to_path(uri)
                 if os.path.isfile(path):
                     return path, ""
-                basename = os.path.basename(path)
+                basename = _hint_basename(path or uri)
+                if not basename:
+                    return "", path or uri
                 # Try AAF directory itself
                 candidate = os.path.join(aaf_dir, basename)
                 if os.path.isfile(candidate):

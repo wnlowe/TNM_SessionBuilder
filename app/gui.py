@@ -328,8 +328,9 @@ class App(ctk.CTk):
         Shows the unresolved paths and offers the user a chance to point to
         the audio files folder so we can re-resolve by basename.
         """
+        from .aaf_parser import _hint_basename
         n = len(self.aaf_session.missing_media)
-        sample = "\n".join(f"  • {os.path.basename(p)}"
+        sample = "\n".join(f"  • {_hint_basename(p) or p}"
                            for p in self.aaf_session.missing_media[:8])
         if n > 8:
             sample += f"\n  … and {n - 8} more"
@@ -344,16 +345,7 @@ class App(ctk.CTk):
         folder = filedialog.askdirectory(title="Select Audio Files Folder")
         if not folder:
             return
-        resolved = resolve_missing_media(self.aaf_session, folder)
-        if self.aaf_session.missing_media:
-            still = len(self.aaf_session.missing_media)
-            messagebox.showwarning(
-                "Still Missing",
-                f"Resolved {resolved} file(s), but {still} could not be found in that folder:\n\n"
-                + "\n".join(f"  • {os.path.basename(p)}"
-                            for p in self.aaf_session.missing_media[:8])
-                + (f"\n  … and {still - 8} more" if still > 8 else ""),
-            )
+        resolve_missing_media(self.aaf_session, folder)
         # Rebuild display_groups now that more clips may have source_file populated
         self.display_groups = self._build_display_groups_from_aaf()
         self.file_groups    = {g["index"]: {"4060": g["4060_path"],

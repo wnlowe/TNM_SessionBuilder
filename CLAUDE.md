@@ -26,6 +26,19 @@ dist\ReaperSessionGenerator\ReaperSessionGenerator.exe
 **Run from a non-admin terminal.** PyInstaller 6.x warns when run as admin;
 PyInstaller 7.0 will block it entirely.
 
+### Local build (macOS)
+
+```bash
+# Copy the system ffmpeg binary into assets/ first.
+cp "$(which ffmpeg)" assets/ffmpeg
+python3.12 -m pip install -r requirements.txt
+python3.12 -m PyInstaller build.spec --clean --noconfirm
+open dist/ReaperSessionGenerator/ReaperSessionGenerator.app
+```
+
+**Requires Python 3.12.** Install via `brew install python@3.12` if needed.
+ffmpeg must be the real binary (e.g. from `brew install ffmpeg`), not a shim.
+
 ### CI / GitHub Actions
 
 Trigger from the Actions tab → **Build Mac & Windows** → Run workflow.
