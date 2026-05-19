@@ -12,8 +12,11 @@ Strategy:
   3. Merge candidates that are close together in time (within MAX_TAKE_GAP
      seconds) into a single take cluster.
   4. The cluster with the highest average confidence wins.
-  5. The AlignmentResult spans from the first word of the first take to the
-     last word of the last take.
+  5. The single highest-ratio take within that cluster is the result.
+
+  When an AAF is loaded, a post-alignment pass checks for overlapping clips
+  on 'short' role tracks (editor selects).  A matching short clip overrides
+  the whisper position with its precise source_in/source_out.
 
 Confidence (1-5) is based on the BEST single take in the winning cluster:
   5 — ratio >= 0.92
@@ -216,19 +219,19 @@ def align_line_multitake(
     pad_end:   float = 0.10,
 ) -> Tuple[List[TakeSpan], float]:
     """
-    Find all takes of line_text in words.
-    Returns (takes_in_best_cluster, best_single_take_ratio).
+    Find the single best take of line_text in words.
+    Returns ([best_take], best_take_ratio).
     """
     candidates = _find_all_takes(line_text, words)
 
     if not candidates:
         return _best_single_fallback(line_text, words)
 
-    clusters     = _cluster_takes(candidates)
+    clusters   = _cluster_takes(candidates)
     best_cluster = max(clusters, key=_score_cluster)
-    best_ratio   = max(t.ratio for t in best_cluster)
+    best_take  = max(best_cluster, key=lambda t: t.ratio)
 
-    return best_cluster, best_ratio
+    return [best_take], best_take.ratio
 
 
 # ── Public API ────────────────────────────────────────────────────────────────

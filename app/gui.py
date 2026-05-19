@@ -539,6 +539,21 @@ class App(ctk.CTk):
                                              text_color=CLR_MUTED)
         self._review_progress.pack(side="left", padx=14)
 
+        ctk.CTkFrame(ctrl, width=1, fg_color=CLR_MUTED).pack(
+            side="left", padx=8, pady=4, fill="y")
+        ctk.CTkLabel(ctrl, text="Remove conf ≤", font=FONT_SMALL,
+                     text_color=CLR_MUTED).pack(side="left", padx=(0, 2))
+        self._conf_thresh_var = tk.StringVar(value=CONF_LABELS[2])
+        ctk.CTkOptionMenu(ctrl, variable=self._conf_thresh_var,
+                          values=[CONF_LABELS[i] for i in range(1, 5)],
+                          fg_color=CLR_CARD, button_color=CLR_ACCENT,
+                          button_hover_color="#c73d52", text_color=CLR_TEXT,
+                          width=110).pack(side="left", padx=2)
+        ctk.CTkButton(ctrl, text="Remove", width=70,
+                      fg_color="#3a1a1a", hover_color=CLR_ERR,
+                      font=FONT_SMALL,
+                      command=self._remove_low_confidence).pack(side="left", padx=(2, 0))
+
         ctk.CTkButton(ctrl, text="📋  Coverage Review", width=160,
                       fg_color=CLR_CARD, hover_color="#1f5080",
                       command=self._open_coverage_popup).pack(
@@ -816,6 +831,43 @@ class App(ctk.CTk):
                 if clip.source_in <= ar.source_offset < clip.source_out:
                     return clip
         return None
+
+    def _find_short_clip_for_ar(self, ar: "AlignmentResult") -> Optional["AAFClip"]:
+        """
+        Find a clip on a 'short' role track whose source window overlaps the
+        alignment's source window.  Short clips are editor selects — if one
+        overlaps the whisper-found region it is the authoritative position.
+        """
+        if not self.aaf_session:
+            return None
+        gidx = self._alignment_group(ar)
+        if gidx is None:
+            return None
+        grp = next((g for g in self.display_groups if g["index"] == gidx), None)
+        if grp is None:
+            return None
+        source_file = grp.get("4060_path") or grp.get("source_file")
+        if not source_file:
+            return None
+
+        def _role(track_name: str) -> str:
+            sv = self.track_roles.get(track_name)
+            return sv.get() if sv else "unknown"
+
+        ar_end = ar.source_offset + ar.length
+        best_clip = None
+        best_overlap = 0.0
+        for track in self.aaf_session.tracks:
+            if _role(track.name) != "short":
+                continue
+            for clip in track.clips:
+                if clip.source_file != source_file:
+                    continue
+                overlap = min(clip.source_out, ar_end) - max(clip.source_in, ar.source_offset)
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_clip = clip
+        return best_clip
 
     def _recompute_session_time(self, ar: "AlignmentResult") -> None:
         """Recompute session_time_start/end after a manual source_offset/length change."""
@@ -1407,6 +1459,18 @@ class App(ctk.CTk):
                             take.start_sec = max(0.0, take.start_sec - go[gidx_of_ar])
                             take.end_sec   = max(0.0, take.end_sec   - go[gidx_of_ar])
 
+                # Short-clip anchoring: if a 'short' role clip overlaps the
+                # whisper-found region, it is the editor's select — use its
+                # precise source_in/source_out as the authoritative position.
+                if self.aaf_session:
+                    for ar in self.alignments.values():
+                        short_clip = self._find_short_clip_for_ar(ar)
+                        if short_clip:
+                            ar.source_offset = short_clip.source_in
+                            ar.length        = short_clip.duration
+                            ar.confidence    = 5
+                            ar.needs_review  = False
+
                 # Compute session-timeline positions (AAF mode only)
                 if self.aaf_session:
                     for ar in self.alignments.values():
@@ -1500,6 +1564,29 @@ class App(ctk.CTk):
             self._update_card_rows(gidx)
             self._update_timeline(gidx)
             self._update_card_transcript(gidx)
+
+    def _remove_low_confidence(self):
+        """Remove all alignments whose confidence is at or below the selected threshold."""
+        _label_to_conf = {v: k for k, v in CONF_LABELS.items()}
+        thresh = _label_to_conf.get(self._conf_thresh_var.get(), 2)
+        victims = [ri for ri, ar in self.alignments.items() if ar.confidence <= thresh]
+        if not victims:
+            messagebox.showinfo(
+                "Remove Low Confidence",
+                f"No alignments with confidence ≤ {CONF_LABELS[thresh]} found.")
+            return
+        if not messagebox.askyesno(
+            "Remove Low Confidence",
+            f"Remove {len(victims)} alignment(s) with confidence ≤ {CONF_LABELS[thresh]}?\n"
+            "They will appear as Not Found in the coverage review."
+        ):
+            return
+        for ri in victims:
+            self.alignments.pop(ri, None)
+            self.skipped_rows.add(ri)
+        self._review_sel_row   = None
+        self._review_sel_group = None
+        self._refresh_all_review_cards()
 
     def _open_coverage_popup(self):
         """Open the full spreadsheet coverage review popup."""

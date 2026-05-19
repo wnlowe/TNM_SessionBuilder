@@ -25,7 +25,11 @@
       "Read(//c/ProgramData/chocolatey/lib/**)",
       "Bash(py -3.12 -c \"import app.aaf_parser; import app.session_builder; import app.rpp_writer; print\\('OK'\\)\")",
       "Bash(py -3.12 -c \"import app.session_builder; print\\('OK'\\)\")",
-      "Bash(gh run *)"
+      "Bash(gh run *)",
+      "Bash(ls -la \"h:\\\\Coding\\\\TNM_SessionBuilder\\\\\" | head -20)",
+      "Read(//h/Coding/**)",
+      "Bash(py -3.12 -c \"import ast; ast.parse\\(open\\('h:/Coding/TNM_SessionBuilder/app/gui.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(py -3.12 -c \"import ast; ast.parse\\(open\\('h:/Coding/TNM_SessionBuilder/app/gui.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
     ]
   }
 }
