@@ -29,6 +29,7 @@ class ItemDef:
     output_name: str = ""   # → region name
     row_index: str = ""     # → marker name at region start
     note: str = ""          # → <NOTES> block inside item
+    clip_name: str = ""     # → item NAME (from AAF clip/region name)
     color: int = 0
 
 
@@ -241,7 +242,8 @@ def _write_item(w, item: ItemDef):
         for line in item.note.splitlines():
             w(4, f"| {line}")
         w(3, ">")
-    w(3, 'NAME " "')
+    item_name = _quote(item.clip_name) if item.clip_name else '" "'
+    w(3, f"NAME {item_name}")
     w(3, "VOLPAN 1 0 1 -1")
     w(3, f"SOFFS {_fmt(item.source_offset)}")
     w(3, "PLAYRATE 1 0 0 -1 0 0.0025")

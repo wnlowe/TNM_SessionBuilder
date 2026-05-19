@@ -3,7 +3,7 @@ name: Build Mac & Windows
 # ── Triggers ──────────────────────────────────────────────────────────────────
 # Runs automatically on version tags (e.g. v1.0.0).
 # Can also be triggered manually from the Actions tab; use the "platform" input
-# to build only mac, only windows, or both (default).
+# to build only specific targets or all (default).
 on:
   push:
     tags:
@@ -18,17 +18,23 @@ on:
         options:
           - all
           - mac
+          - mac-arm64
+          - mac-intel
           - windows
 
 jobs:
 
   # ────────────────────────────────────────────────────────────────────────────
-  # macOS Build
+  # macOS ARM64 Build (Apple Silicon — macos-latest / macos-14)
   # ────────────────────────────────────────────────────────────────────────────
-  build-mac:
-    name: Build macOS App
+  build-mac-arm64:
+    name: Build macOS App (ARM64)
     runs-on: macos-latest
-    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'mac'
+    if: >
+      github.event_name != 'workflow_dispatch' ||
+      inputs.platform == 'all' ||
+      inputs.platform == 'mac' ||
+      inputs.platform == 'mac-arm64'
 
     steps:
       - name: Checkout code
@@ -39,41 +45,85 @@ jobs:
         with:
           python-version: '3.12'
 
-      # ── Install ffmpeg (bundled into the app) ────────────────────────────────
       - name: Install ffmpeg
         run: brew install ffmpeg
 
-      # ── Python dependencies ──────────────────────────────────────────────────
-      # llvmlite/numba are pulled in by openai-whisper; pip uses pre-built
-      # wheels on macOS so no system LLVM install is needed.
       - name: Upgrade pip
         run: pip install --upgrade pip setuptools wheel
 
       - name: Install all requirements
         run: pip install -r requirements.txt
 
-      # ── Bundle ffmpeg binary into assets/ so PyInstaller can include it ──────
+      # cp follows symlinks on macOS, so this copies the real binary.
       - name: Copy ffmpeg to assets
         run: |
           mkdir -p assets
           cp $(which ffmpeg) assets/ffmpeg
 
-      # ── Run PyInstaller ──────────────────────────────────────────────────────
       - name: Build with PyInstaller
         run: pyinstaller build.spec --clean --noconfirm
 
-      # ── Zip the .app bundle ──────────────────────────────────────────────────
       - name: Zip app bundle
         run: |
           cd dist
-          zip -r ReaperSessionGenerator-mac.zip ReaperSessionGenerator.app
+          zip -r ReaperSessionGenerator-mac-arm64.zip ReaperSessionGenerator.app
 
-      # ── Upload as artifact ───────────────────────────────────────────────────
-      - name: Upload macOS artifact
+      - name: Upload macOS ARM64 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ReaperSessionGenerator-mac
-          path: dist/ReaperSessionGenerator-mac.zip
+          name: ReaperSessionGenerator-mac-arm64
+          path: dist/ReaperSessionGenerator-mac-arm64.zip
+          retention-days: 30
+
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # macOS Intel Build (x86_64 — macos-12)
+  # ────────────────────────────────────────────────────────────────────────────
+  build-mac-intel:
+    name: Build macOS App (Intel)
+    runs-on: macos-12
+    if: >
+      github.event_name != 'workflow_dispatch' ||
+      inputs.platform == 'all' ||
+      inputs.platform == 'mac' ||
+      inputs.platform == 'mac-intel'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install ffmpeg
+        run: brew install ffmpeg
+
+      - name: Upgrade pip
+        run: pip install --upgrade pip setuptools wheel
+
+      - name: Install all requirements
+        run: pip install -r requirements.txt
+
+      - name: Copy ffmpeg to assets
+        run: |
+          mkdir -p assets
+          cp $(which ffmpeg) assets/ffmpeg
+
+      - name: Build with PyInstaller
+        run: pyinstaller build.spec --clean --noconfirm
+
+      - name: Zip app bundle
+        run: |
+          cd dist
+          zip -r ReaperSessionGenerator-mac-intel.zip ReaperSessionGenerator.app
+
+      - name: Upload macOS Intel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ReaperSessionGenerator-mac-intel
+          path: dist/ReaperSessionGenerator-mac-intel.zip
           retention-days: 30
 
 
@@ -83,7 +133,10 @@ jobs:
   build-windows:
     name: Build Windows EXE
     runs-on: windows-latest
-    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows'
+    if: >
+      github.event_name != 'workflow_dispatch' ||
+      inputs.platform == 'all' ||
+      inputs.platform == 'windows'
 
     steps:
       - name: Checkout code
@@ -94,37 +147,38 @@ jobs:
         with:
           python-version: '3.12'
 
-      # ── Install ffmpeg via Chocolatey ────────────────────────────────────────
       - name: Install ffmpeg
         run: choco install ffmpeg -y
 
-      # ── Python dependencies ──────────────────────────────────────────────────
       - name: Upgrade pip
         run: pip install --upgrade pip setuptools wheel
 
       - name: Install all requirements
         run: pip install -r requirements.txt
 
-      # ── Copy ffmpeg.exe to assets/ for bundling ──────────────────────────────
+      # Use the real ffmpeg binary from the Chocolatey lib tree, not the shim.
+      # The Chocolatey shim (in bin/) uses a relative path that breaks when moved
+      # into the PyInstaller bundle. Fall back to Get-Command if the path changes.
       - name: Copy ffmpeg to assets
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path assets
-          $ffmpegPath = (Get-Command ffmpeg).Source
-          Copy-Item $ffmpegPath assets\ffmpeg.exe
+          $chocoBin = "C:\ProgramData\chocolatey\lib\ffmpeg\tools\ffmpeg\bin\ffmpeg.exe"
+          if (Test-Path $chocoBin) {
+            Copy-Item $chocoBin assets\ffmpeg.exe
+          } else {
+            Copy-Item (Get-Command ffmpeg).Source assets\ffmpeg.exe
+          }
 
-      # ── Run PyInstaller ──────────────────────────────────────────────────────
       - name: Build with PyInstaller
         run: pyinstaller build.spec --clean --noconfirm
 
-      # ── Zip the output folder ────────────────────────────────────────────────
       - name: Zip output
         shell: powershell
         run: |
           Compress-Archive -Path dist\ReaperSessionGenerator\* `
             -DestinationPath dist\ReaperSessionGenerator-windows.zip
 
-      # ── Upload as artifact ───────────────────────────────────────────────────
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
@@ -134,22 +188,28 @@ jobs:
 
 
   # ────────────────────────────────────────────────────────────────────────────
-  # (Optional) Create a GitHub Release with both builds attached
+  # Create a GitHub Release with all builds attached
   # Only runs when triggered by a tag push
   # ────────────────────────────────────────────────────────────────────────────
   release:
     name: Create GitHub Release
-    needs: [build-mac, build-windows]
+    needs: [build-mac-arm64, build-mac-intel, build-windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
 
     steps:
-      - name: Download Mac artifact
+      - name: Download Mac ARM64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: ReaperSessionGenerator-mac
+          name: ReaperSessionGenerator-mac-arm64
+          path: release/
+
+      - name: Download Mac Intel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ReaperSessionGenerator-mac-intel
           path: release/
 
       - name: Download Windows artifact
@@ -162,7 +222,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release/ReaperSessionGenerator-mac.zip
+            release/ReaperSessionGenerator-mac-arm64.zip
+            release/ReaperSessionGenerator-mac-intel.zip
             release/ReaperSessionGenerator-windows.zip
           generate_release_notes: true
         env:

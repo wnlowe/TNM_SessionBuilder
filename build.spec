@@ -16,6 +16,12 @@ customtkinter_datas = collect_data_files('customtkinter')
 openpyxl_datas = collect_data_files('openpyxl')
 # tiktoken ships BPE vocab files loaded by the tokenizer at runtime.
 tiktoken_datas = collect_data_files('tiktoken')
+# aaf2 (pyaaf2) — collect any bundled data files (schema/class definitions).
+# collect_data_files is a no-op if the package has none; safe to include.
+try:
+    aaf2_datas = collect_data_files('aaf2')
+except Exception:
+    aaf2_datas = []
 
 # jaraco is a PEP 420 namespace package — no __init__.py exists anywhere on
 # disk. PyInstaller's frozen importer can find jaraco.text etc. in the
@@ -43,7 +49,8 @@ if os.path.exists('assets/icon.ico'):
 if os.path.exists('assets/icon.png'):
     icon_datas.append(('assets/icon.png', 'assets'))
 
-all_datas = whisper_datas + customtkinter_datas + jaraco_datas + openpyxl_datas + tiktoken_datas + icon_datas
+all_datas = (whisper_datas + customtkinter_datas + jaraco_datas
+             + openpyxl_datas + tiktoken_datas + aaf2_datas + icon_datas)
 
 # ── Hidden imports that PyInstaller can't auto-detect ─────────────────────────
 
@@ -85,6 +92,9 @@ hidden += collect_submodules('jaraco.functools')
 hidden += collect_submodules('jaraco.context')
 hidden += collect_submodules('jaraco.collections')
 hidden += jaraco_hidden
+# aaf2 (pyaaf2) — pure Python; collect_submodules picks up all sub-packages.
+hidden += ['aaf2']
+hidden += collect_submodules('aaf2')
 
 # ── Analysis ──────────────────────────────────────────────────────────────────
 

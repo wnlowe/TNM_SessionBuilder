@@ -2,11 +2,10 @@
 gui.py — Main application window.
 
 Tabs:
-  1 · Setup       – XLSX + folder + column mapping
-  2 · File Groups – review auto-grouped files
-  3 · Transcribe  – run Whisper per group
-  4 · Align       – review/correct line-to-audio alignment, playback
-  5 · Generate    – build RPP session
+  1 · Setup  – XLSX + AAF + column mapping
+  2 · Tracks – assign roles to AAF tracks
+  3 · Review – transcribe, align, correct
+  4 · Generate – build RPP session
 """
 
 from __future__ import annotations
@@ -20,12 +19,12 @@ from typing import Dict, List, Optional, Tuple
 import customtkinter as ctk
 
 from .spreadsheet import SpreadsheetData
-from .file_grouper import scan_folder, groups_to_display, MIC_VARIANTS
 from .transcriber import available_models, transcribe
 from .aligner import align_all, AlignmentResult
 from .audio_player import AudioPlayer
 from .waveform_widget import WaveformWidget
 from .session_builder import build_session
+from .aaf_parser import parse_aaf, AAFSession, AAFClip
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -61,10 +60,16 @@ class App(ctk.CTk):
 
         # ── Core state ────────────────────────────────────────────────────────
         self.xlsx_path     = tk.StringVar()
-        self.folder_path   = tk.StringVar()
+        self.aaf_path      = tk.StringVar()
         self.sheet_data: Optional[SpreadsheetData] = None
         self.rows:       List[Dict] = []
-        self.file_groups: Dict[str, Dict] = {}   # group_index → {4060/4061/416: path}
+
+        # AAF session data
+        self.aaf_session:  Optional[AAFSession] = None
+        self.track_roles:  Dict[str, tk.StringVar] = {}  # track_name → role StringVar
+
+        # file_groups / display_groups built from AAF for review-tab compatibility
+        self.file_groups:    Dict[str, Dict] = {}   # group_index → {4060/4061/416: path}
         self.display_groups: List[Dict] = []
 
         # Transcription results (keyed by group index)
@@ -80,7 +85,6 @@ class App(ctk.CTk):
         self.col_line_text = tk.StringVar()
         self.col_character = tk.StringVar(value="(none)")
         self.char_filter   = tk.StringVar()
-        self.use_grouping  = tk.BooleanVar(value=True)
 
         # Row→group assignment
         self.row_to_group: Dict[str, str] = {}
@@ -149,10 +153,10 @@ class App(ctk.CTk):
             text_color=CLR_TEXT,
         )
         self.tabs.pack(fill="both", expand=True, padx=10, pady=(6, 10))
-        for n in ("1 · Setup", "2 · File Groups", "3 · Review", "4 · Generate"):
+        for n in ("1 · Setup", "2 · Tracks", "3 · Review", "4 · Generate"):
             self.tabs.add(n)
         self._build_setup_tab(self.tabs.tab("1 · Setup"))
-        self._build_groups_tab(self.tabs.tab("2 · File Groups"))
+        self._build_tracks_tab(self.tabs.tab("2 · Tracks"))
         self._build_review_tab(self.tabs.tab("3 · Review"))
         self._build_generate_tab(self.tabs.tab("4 · Generate"))
 
@@ -180,19 +184,16 @@ class App(ctk.CTk):
             text="Load a spreadsheet first.", font=FONT_BODY, text_color=CLR_MUTED)
         self._col_map_hint.pack(anchor="w")
 
-        sec2 = self._section(scroll, "🎵  Audio Folder")
+        sec2 = self._section(scroll, "🎵  AAF File")
         frow = ctk.CTkFrame(sec2, fg_color="transparent")
         frow.pack(fill="x", pady=4)
-        ctk.CTkEntry(frow, textvariable=self.folder_path, width=480,
+        ctk.CTkEntry(frow, textvariable=self.aaf_path, width=480,
                      fg_color=CLR_CARD, text_color=CLR_TEXT, border_color=CLR_ACCENT,
-                     placeholder_text="Folder containing .wav files…").pack(side="left", padx=(0,8))
+                     placeholder_text="Path to Pro Tools AAF export…").pack(side="left", padx=(0,8))
         ctk.CTkButton(frow, text="Browse…", width=90, fg_color=CLR_ACCENT,
-                      hover_color="#c73d52", command=self._browse_folder).pack(side="left")
-        ctk.CTkSwitch(sec2, text="Use 4060/4061/416 naming convention",
-                      variable=self.use_grouping, progress_color=CLR_ACCENT,
-                      font=FONT_BODY, text_color=CLR_TEXT).pack(anchor="w", pady=6)
+                      hover_color="#c73d52", command=self._browse_aaf).pack(side="left")
 
-        ctk.CTkButton(scroll, text="Apply Settings & Scan Files  →",
+        ctk.CTkButton(scroll, text="Apply Settings & Load AAF  →",
                       fg_color=CLR_ACCENT, hover_color="#c73d52",
                       font=FONT_HEADING, height=42,
                       command=self._apply_setup).pack(pady=14, anchor="e", padx=4)
@@ -205,10 +206,11 @@ class App(ctk.CTk):
             self.xlsx_path.set(p)
             self._load_xlsx()
 
-    def _browse_folder(self):
-        p = filedialog.askdirectory()
+    def _browse_aaf(self):
+        p = filedialog.askopenfilename(
+            filetypes=[("AAF", "*.aaf"), ("All", "*.*")])
         if p:
-            self.folder_path.set(p)
+            self.aaf_path.set(p)
 
     def _load_xlsx(self):
         path = self.xlsx_path.get().strip()
@@ -275,15 +277,42 @@ class App(ctk.CTk):
             index_col=self.col_index.get(), output_name_col=self.col_output.get(),
             line_text_col=self.col_line_text.get(),
             character_col=char_col, character_filter=char_filt)
-        folder = self.folder_path.get().strip()
-        if self.use_grouping.get() and folder:
-            raw, _ = scan_folder(folder)
-            self.display_groups = groups_to_display(raw)
-            self.file_groups = {g["index"]: {"4060": g["4060"], "4061": g["4061"],
-                                             "416": g["416"]} for g in raw}
-        else:
-            self.display_groups = []
-            self.file_groups = {}
+
+        # ── Parse AAF ────────────────────────────────────────────────────────
+        aaf_path = self.aaf_path.get().strip()
+        if not aaf_path or not os.path.isfile(aaf_path):
+            messagebox.showerror("Error", "Select a valid AAF file.")
+            return
+        try:
+            self.aaf_session = parse_aaf(aaf_path)
+        except Exception as e:
+            messagebox.showerror("AAF Error", str(e))
+            return
+
+        # Build / preserve track role StringVars
+        existing_roles = dict(self.track_roles)
+        self.track_roles = {}
+        for track in self.aaf_session.tracks:
+            if track.name in existing_roles:
+                self.track_roles[track.name] = existing_roles[track.name]
+            else:
+                self.track_roles[track.name] = tk.StringVar(value=track.suggested_role)
+
+        # Build display_groups / file_groups for review-tab compatibility
+        self.display_groups = self._build_display_groups_from_aaf()
+        self.file_groups    = {g["index"]: {"4060": g["4060_path"],
+                                             "4061": g["4061_path"],
+                                             "416":  g["416_path"]}
+                               for g in self.display_groups}
+
+        # Warn about missing media
+        if self.aaf_session.missing_media:
+            msg = "Some media files could not be resolved:\n" + \
+                  "\n".join(f"  • {p}" for p in self.aaf_session.missing_media[:10])
+            if len(self.aaf_session.missing_media) > 10:
+                msg += f"\n  … and {len(self.aaf_session.missing_media) - 10} more"
+            messagebox.showwarning("Missing Media", msg)
+
         self.transcripts      = {}
         self.word_data        = {}
         self.alignments       = {}
@@ -291,56 +320,158 @@ class App(ctk.CTk):
         self._group_offsets   = {}
         self.skipped_rows     = set()
         self._setup_status.configure(
-            text=f"✓ {len(self.rows)} rows · {len(self.file_groups)} file groups",
+            text=f"✓ {len(self.rows)} rows · {len(self.aaf_session.tracks)} tracks",
             text_color=CLR_OK)
-        self._refresh_groups_tab()
+        self._refresh_tracks_tab()
         self._refresh_review_tab()
-        self.tabs.set("2 · File Groups")
+        self.tabs.set("2 · Tracks")
+
+    def _build_display_groups_from_aaf(self) -> List[Dict]:
+        """
+        Build a display_groups list (same schema as the old folder-scan output)
+        from the parsed AAF session, using current track role assignments.
+
+        One entry per unique source file that appears on any "4060"-role track.
+        The matching 4061/416 source files are found by looking for clips on
+        those role-tracks that share the same source filename.
+        """
+        if not self.aaf_session:
+            return []
+
+        def _role(track_name: str) -> str:
+            sv = self.track_roles.get(track_name)
+            return sv.get() if sv else "unknown"
+
+        # Collect source files per role
+        role_files: Dict[str, List[str]] = {"4060": [], "4061": [], "416": []}
+        for track in self.aaf_session.tracks:
+            r = _role(track.name)
+            if r in role_files:
+                for clip in track.clips:
+                    if clip.source_file and clip.source_file not in role_files[r]:
+                        role_files[r].append(clip.source_file)
+
+        groups = []
+        for i, sf in enumerate(role_files["4060"]):
+            basename = os.path.basename(sf)
+            # Match 4061/416 by same basename
+            p4061 = next((p for p in role_files["4061"]
+                          if os.path.basename(p) == basename), None)
+            p416  = next((p for p in role_files["416"]
+                          if os.path.basename(p) == basename), None)
+            # Fallback: first file in that role list if names differ
+            if p4061 is None and role_files["4061"]:
+                p4061 = role_files["4061"][min(i, len(role_files["4061"]) - 1)]
+            if p416  is None and role_files["416"]:
+                p416  = role_files["416"][min(i, len(role_files["416"]) - 1)]
+            groups.append({
+                "index":      str(i),
+                "base":       os.path.splitext(basename)[0],
+                "source_file": sf,
+                "4060":       basename if sf else "---",
+                "4061":       os.path.basename(p4061) if p4061 else "---",
+                "416":        os.path.basename(p416)  if p416  else "---",
+                "4060_path":  sf,
+                "4061_path":  p4061,
+                "416_path":   p416,
+            })
+        return groups
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 2 – File Groups
+    # TAB 2 – Track Assignment
     # ═══════════════════════════════════════════════════════════════════════════
-    def _build_groups_tab(self, parent):
+    def _build_tracks_tab(self, parent):
         parent.configure(fg_color=CLR_BG)
         top = ctk.CTkFrame(parent, fg_color=CLR_PANEL, height=44, corner_radius=6)
-        top.pack(fill="x", padx=10, pady=(10,4))
-        ctk.CTkLabel(top, text="Review auto-grouped files. One group may cover multiple lines.",
+        top.pack(fill="x", padx=10, pady=(10, 4))
+        ctk.CTkLabel(top,
+                     text="Assign a role to each AAF track. The app auto-guesses from track names.",
                      font=FONT_BODY, text_color=CLR_MUTED).pack(side="left", padx=14, pady=8)
         ctk.CTkButton(top, text="Proceed to Review  →", width=190,
                       fg_color=CLR_ACCENT, hover_color="#c73d52",
                       command=lambda: self.tabs.set("3 · Review")).pack(side="right", padx=10, pady=6)
-        ctk.CTkButton(top, text="Re-scan", width=90, fg_color=CLR_CARD,
+        ctk.CTkButton(top, text="Re-parse AAF", width=110, fg_color=CLR_CARD,
                       hover_color=CLR_ACCENT, command=self._apply_setup).pack(side="right", padx=4, pady=6)
 
-        self._groups_scroll = ctk.CTkScrollableFrame(parent, fg_color=CLR_BG)
-        self._groups_scroll.pack(fill="both", expand=True, padx=10, pady=4)
-        self._groups_table_frame = self._groups_scroll
-        self._groups_status = ctk.CTkLabel(parent, text="", font=FONT_SMALL, text_color=CLR_MUTED)
-        self._groups_status.pack(anchor="w", padx=12, pady=4)
+        self._tracks_scroll = ctk.CTkScrollableFrame(parent, fg_color=CLR_BG)
+        self._tracks_scroll.pack(fill="both", expand=True, padx=10, pady=4)
+        self._tracks_table_frame = self._tracks_scroll
+        self._tracks_status = ctk.CTkLabel(parent, text="", font=FONT_SMALL, text_color=CLR_MUTED)
+        self._tracks_status.pack(anchor="w", padx=12, pady=4)
 
-    def _refresh_groups_tab(self):
-        for w in self._groups_table_frame.winfo_children():
+    def _refresh_tracks_tab(self):
+        for w in self._tracks_table_frame.winfo_children():
             w.destroy()
-        if not self.display_groups:
-            ctk.CTkLabel(self._groups_table_frame,
-                         text="No groups found.", font=FONT_BODY, text_color=CLR_WARN).pack(pady=20)
+        if not self.aaf_session:
+            ctk.CTkLabel(self._tracks_table_frame,
+                         text="No AAF loaded yet.", font=FONT_BODY,
+                         text_color=CLR_WARN).pack(pady=20)
             return
-        self._grp_row(["Index", "Base name", "4060", "4061", "416"], header=True)
-        for g in self.display_groups:
-            missing = any(g[mk] == "---" for mk in ["4060","4061","416"])
-            self._grp_row([g["index"], g["base"], g["4060"], g["4061"], g["416"]], missing=missing)
-        complete = sum(1 for g in self.display_groups if all(g[mk] != "---" for mk in ["4060","4061","416"]))
-        self._groups_status.configure(
-            text=f"{len(self.display_groups)} groups · {complete} complete · {len(self.display_groups)-complete} partial")
 
-    def _grp_row(self, vals, header=False, missing=False):
+        # Header row
+        self._track_row(["Track Name", "Clips", "Duration", "Role"], header=True)
+
+        for track in self.aaf_session.tracks:
+            n_clips  = len(track.clips)
+            total_dur = sum(c.duration for c in track.clips)
+            dur_str  = f"{total_dur:.1f}s" if total_dur < 3600 else \
+                       f"{int(total_dur//60)}m {int(total_dur%60)}s"
+            role_var = self.track_roles.get(track.name)
+            if role_var is None:
+                role_var = tk.StringVar(value=track.suggested_role)
+                self.track_roles[track.name] = role_var
+
+            row_f = ctk.CTkFrame(self._tracks_table_frame, fg_color=CLR_PANEL, corner_radius=4)
+            row_f.pack(fill="x", pady=1, padx=2)
+            ctk.CTkLabel(row_f, text=track.name, font=FONT_BODY,
+                         text_color=CLR_TEXT, width=260, anchor="w").pack(side="left", padx=8, pady=6)
+            ctk.CTkLabel(row_f, text=str(n_clips), font=FONT_BODY,
+                         text_color=CLR_MUTED, width=60, anchor="e").pack(side="left", padx=4)
+            ctk.CTkLabel(row_f, text=dur_str, font=FONT_BODY,
+                         text_color=CLR_MUTED, width=90, anchor="e").pack(side="left", padx=8)
+            ctk.CTkOptionMenu(row_f, variable=role_var,
+                              values=["4060", "4061", "416", "short", "ignore"],
+                              fg_color=CLR_CARD, button_color=CLR_ACCENT,
+                              button_hover_color="#c73d52", text_color=CLR_TEXT,
+                              width=130,
+                              command=lambda _val, tn=track.name: self._on_role_change(tn),
+                              ).pack(side="left", padx=12, pady=4)
+
+        if self.aaf_session.missing_media:
+            warn = ctk.CTkFrame(self._tracks_table_frame, fg_color="#3a2000", corner_radius=6)
+            warn.pack(fill="x", pady=(12, 2), padx=2)
+            ctk.CTkLabel(warn, text=f"⚠  {len(self.aaf_session.missing_media)} media file(s) could not be resolved:",
+                         font=FONT_BODY, text_color=CLR_WARN).pack(anchor="w", padx=12, pady=(8, 2))
+            for mp in self.aaf_session.missing_media[:8]:
+                ctk.CTkLabel(warn, text=f"   {os.path.basename(mp)}",
+                             font=FONT_MONO, text_color=CLR_MUTED).pack(anchor="w", padx=12)
+            if len(self.aaf_session.missing_media) > 8:
+                ctk.CTkLabel(warn, text=f"   … and {len(self.aaf_session.missing_media)-8} more",
+                             font=FONT_SMALL, text_color=CLR_MUTED).pack(anchor="w", padx=12, pady=(0, 8))
+
+        self._tracks_status.configure(
+            text=f"{len(self.aaf_session.tracks)} tracks · "
+                 f"{sum(len(t.clips) for t in self.aaf_session.tracks)} clips total")
+
+    def _track_row(self, vals, header=False):
         bg = CLR_CARD if header else CLR_PANEL
-        f  = ctk.CTkFrame(self._groups_table_frame, fg_color=bg, corner_radius=4)
+        f  = ctk.CTkFrame(self._tracks_table_frame, fg_color=bg, corner_radius=4)
         f.pack(fill="x", pady=1, padx=2)
-        for val, w in zip(vals, [80, 280, 190, 190, 190]):
-            tc = CLR_ACCENT if header else (CLR_WARN if (missing and str(val)=="---") else CLR_TEXT)
-            ctk.CTkLabel(f, text=str(val), font=FONT_HEADING if header else FONT_BODY,
-                         text_color=tc, width=w, anchor="w").pack(side="left", padx=8, pady=5)
+        for val, w in zip(vals, [260, 60, 90, 130]):
+            ctk.CTkLabel(f, text=str(val),
+                         font=FONT_HEADING if header else FONT_BODY,
+                         text_color=CLR_ACCENT if header else CLR_TEXT,
+                         width=w, anchor="w" if header else "e" if w < 200 else "w"
+                         ).pack(side="left", padx=8, pady=5)
+
+    def _on_role_change(self, track_name: str):
+        """Called when the user changes a track role dropdown. Rebuilds display_groups."""
+        if self.aaf_session:
+            self.display_groups = self._build_display_groups_from_aaf()
+            self.file_groups    = {g["index"]: {"4060": g["4060_path"],
+                                                 "4061": g["4061_path"],
+                                                 "416":  g["416_path"]}
+                                   for g in self.display_groups}
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 3 – Review  (combined Transcribe + Align)
@@ -625,6 +756,48 @@ class App(ctk.CTk):
     def _ar_belongs_to_group(self, ar: "AlignmentResult", gidx: str) -> bool:
         """Check if an alignment result belongs to gidx via _group tag lookup."""
         return self._alignment_group(ar) == gidx
+
+    def _find_primary_clip_for_ar(self, ar: "AlignmentResult") -> Optional["AAFClip"]:
+        """
+        Find the AAFClip on the 4060 role track whose [source_in, source_out]
+        window contains ar.source_offset. Returns None in folder mode or when
+        no matching clip is found.
+        """
+        if not self.aaf_session:
+            return None
+        gidx = self._alignment_group(ar)
+        if gidx is None:
+            return None
+        # Resolve source file for this group index
+        grp = next((g for g in self.display_groups if g["index"] == gidx), None)
+        if grp is None:
+            return None
+        source_file = grp.get("4060_path") or grp.get("source_file")
+        if not source_file:
+            return None
+
+        def _role(track_name: str) -> str:
+            sv = self.track_roles.get(track_name)
+            return sv.get() if sv else "unknown"
+
+        for track in self.aaf_session.tracks:
+            if _role(track.name) != "4060":
+                continue
+            for clip in track.clips:
+                if clip.source_file != source_file:
+                    continue
+                if clip.source_in <= ar.source_offset < clip.source_out:
+                    return clip
+        return None
+
+    def _recompute_session_time(self, ar: "AlignmentResult") -> None:
+        """Recompute session_time_start/end after a manual source_offset/length change."""
+        if not self.aaf_session:
+            return
+        clip = self._find_primary_clip_for_ar(ar)
+        if clip:
+            ar.session_time_start = clip.timeline_pos + (ar.source_offset - clip.source_in)
+            ar.session_time_end   = ar.session_time_start + ar.length
 
     # ── Timeline update ────────────────────────────────────────────────────────
 
@@ -1013,6 +1186,7 @@ class App(ctk.CTk):
         ar.length        = max(0.01, e - s)
         ar.needs_review  = False
         ar.confidence    = max(ar.confidence, 3)
+        self._recompute_session_time(ar)
         self._update_timeline(gidx)
         self._update_card_transcript(gidx)
         # Refresh the row summary label
@@ -1205,6 +1379,15 @@ class App(ctk.CTk):
                         for take in ar.takes:
                             take.start_sec = max(0.0, take.start_sec - go[gidx_of_ar])
                             take.end_sec   = max(0.0, take.end_sec   - go[gidx_of_ar])
+
+                # Compute session-timeline positions (AAF mode only)
+                if self.aaf_session:
+                    for ar in self.alignments.values():
+                        clip = self._find_primary_clip_for_ar(ar)
+                        if clip:
+                            ar.session_time_start = (clip.timeline_pos
+                                                      + (ar.source_offset - clip.source_in))
+                            ar.session_time_end   = ar.session_time_start + ar.length
 
                 for g in dg:
                     gi = g["index"]
@@ -1648,6 +1831,7 @@ class App(ctk.CTk):
                     existing.length        = max(0.01, e - s)
                     existing.needs_review  = False
                     existing.confidence    = max(existing.confidence, 3)
+                    self._recompute_session_time(existing)
                 else:
                     # Create a synthetic AlignmentResult for a manually assigned row
                     from .aligner import AlignmentResult as AR
@@ -1814,26 +1998,36 @@ class App(ctk.CTk):
         if not out:
             messagebox.showerror("Error", "Choose an output .RPP path.")
             return
-        # Build cuts from alignments
-        cuts = {ar.row_index: (ar.source_offset, ar.length)
-                for ar in self.alignments.values()}
-        # Build file_groups keyed by row index.
-        # row_to_group maps everything to "_all" (combined transcription),
-        # so we resolve the real group via _alignment_group(ar) instead.
-        row_file_groups = {}
-        for row in self.rows:
-            ridx = row["index"]
-            ar = self.alignments.get(ridx)
-            if ar is None:
-                continue
-            gidx = self._alignment_group(ar)
-            if gidx and gidx in self.file_groups:
-                row_file_groups[ridx] = self.file_groups[gidx]
         os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
         try:
-            result = build_session(rows=self.rows, file_groups=row_file_groups,
-                                   cuts=cuts, output_path=out,
-                                   project_name=self.project_name.get() or "Session")
+            if self.aaf_session is not None:
+                from .session_builder import build_session_aaf
+                result = build_session_aaf(
+                    rows         = self.rows,
+                    alignments   = self.alignments,
+                    aaf_session  = self.aaf_session,
+                    track_roles  = {name: var.get()
+                                    for name, var in self.track_roles.items()},
+                    output_path  = out,
+                    project_name = self.project_name.get() or "Session",
+                    skipped_rows = self.skipped_rows,
+                )
+            else:
+                # Folder-mode fallback (no AAF loaded)
+                cuts = {ar.row_index: (ar.source_offset, ar.length)
+                        for ar in self.alignments.values()}
+                row_file_groups = {}
+                for row in self.rows:
+                    ridx = row["index"]
+                    ar   = self.alignments.get(ridx)
+                    if ar is None:
+                        continue
+                    gidx = self._alignment_group(ar)
+                    if gidx and gidx in self.file_groups:
+                        row_file_groups[ridx] = self.file_groups[gidx]
+                result = build_session(rows=self.rows, file_groups=row_file_groups,
+                                       cuts=cuts, output_path=out,
+                                       project_name=self.project_name.get() or "Session")
             self._gen_result.configure(text=f"✓ Written: {result}", text_color=CLR_OK)
             messagebox.showinfo("Done", f"Session written:\n{result}")
         except Exception as e:

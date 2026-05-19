@@ -68,10 +68,14 @@ class AlignmentResult:
     word_end_i:    int   = 0
     source_offset: float = 0.0
     length:        float = 0.0
-    confidence:    int   = 1
-    ratio:         float = 0.0
-    needs_review:  bool  = True
-    take_count:    int   = 1
+    confidence:         int   = 1
+    ratio:              float = 0.0
+    needs_review:       bool  = True
+    take_count:         int   = 1
+    # Set post-alignment by the GUI once session-timeline positions are known.
+    # Remain 0.0 when operating in folder mode (no AAF).
+    session_time_start: float = 0.0
+    session_time_end:   float = 0.0
 
 
 # ── Text helpers ──────────────────────────────────────────────────────────────

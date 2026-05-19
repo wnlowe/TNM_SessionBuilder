@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import pyaaf2; print\\(pyaaf2.__version__\\)\")",
+      "Bash(python -c \"import pyaaf2; help\\(pyaaf2\\)\")",
+      "Bash(pip show *)",
+      "Bash(pip index *)",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import aaf2; print\\(dir\\(aaf2\\)\\)\")",
+      "Bash(cd /c)",
+      "Bash(python3 -c \"import aaf2; print\\(dir\\(aaf2\\)\\)\")",
+      "Bash(python3 -c ' *)",
+      "Bash(py -3.12 -m pytest tests/test_aaf_parser.py tests/test_session_builder_aaf.py -v)",
+      "Bash(pip install *)",
+      "Bash(py -3.12 -m pip install pytest -q)",
+      "Bash(py -3.12 -m pytest tests/ -v --ignore=tests/test_executable.py)",
+      "Bash(Get-Content \"H:\\\\Coding\\\\TNM_SessionBuilder\\\\build\\\\build\\\\warn-build.txt\")",
+      "Bash(Select-String -Pattern \"aaf2\")",
+      "Bash(py -3.12 -c \"import aaf2; print\\(aaf2.__file__\\); import aaf2.mobs; print\\(aaf2.mobs.__file__\\)\")",
+      "Bash(py -3.12 -c ' *)",
+      "Bash(py -3.12 -c \"import os; p='i:/TNM_Downloads/250722_TNM_Rickey_Cross_DELIVERY_CCTest/250722_TNM_Rickey_Cross_DELIVERY/PT SESSION/250722_TNM_Rickey_Cross/Audio Files/250722_TNM_Rickey_Cross_4060_01.1.wav'; print\\('exists:', os.path.isfile\\(p\\)\\); print\\('drive:', os.path.exists\\('i:/'\\)\\)\")",
+      "Bash(where ffmpeg *)",
+      "Bash(\"h:/Coding/TNM_SessionBuilder/dist/ReaperSessionGenerator/_internal/ffmpeg.exe\" -version)",
+      "Bash(find \"/c/ProgramData/chocolatey/lib\" -name \"ffmpeg.exe\" 2>/dev/null | head -5)",
+      "Read(//c/ProgramData/chocolatey/lib/**)",
+      "Bash(py -3.12 -c \"import app.aaf_parser; import app.session_builder; import app.rpp_writer; print\\('OK'\\)\")",
+      "Bash(py -3.12 -c \"import app.session_builder; print\\('OK'\\)\")"
+    ]
+  }
+}
