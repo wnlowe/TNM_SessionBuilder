@@ -25,6 +25,7 @@ from .audio_player import AudioPlayer
 from .waveform_widget import WaveformWidget
 from .session_builder import build_session
 from .aaf_parser import parse_aaf, resolve_missing_media, AAFSession, AAFClip
+from .pt_session_parser import parse_pt_session, PTSession
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -59,14 +60,17 @@ class App(ctk.CTk):
         self.minsize(1000, 680)
 
         # ── Core state ────────────────────────────────────────────────────────
-        self.xlsx_path     = tk.StringVar()
         self.aaf_path      = tk.StringVar()
-        self.sheet_data: Optional[SpreadsheetData] = None
+        self.sheet_entries: List[Dict] = []  # per-file: {path, data, col_index, col_output, col_line_text, col_character, char_filter, expanded, card, body, toggle_btn}
         self.rows:       List[Dict] = []
 
         # AAF session data
         self.aaf_session:  Optional[AAFSession] = None
         self.track_roles:  Dict[str, tk.StringVar] = {}  # track_name → role StringVar
+
+        # Pro Tools session TXT (optional — used for marker-guided alignment)
+        self.pt_session_path = tk.StringVar()
+        self.pt_session: Optional[PTSession] = None
 
         # file_groups / display_groups built from AAF for review-tab compatibility
         self.file_groups:    Dict[str, Dict] = {}   # group_index → {4060/4061/416: path}
@@ -79,12 +83,7 @@ class App(ctk.CTk):
         # Alignment results (keyed by row index)
         self.alignments: Dict[str, AlignmentResult] = {}
 
-        # Column mapping
-        self.col_index     = tk.StringVar()
-        self.col_output    = tk.StringVar()
-        self.col_line_text = tk.StringVar()
-        self.col_character = tk.StringVar(value="(none)")
-        self.char_filter   = tk.StringVar()
+        # (column mapping is per sheet_entry — see self.sheet_entries)
 
         # Row→group assignment
         self.row_to_group: Dict[str, str] = {}
@@ -168,21 +167,15 @@ class App(ctk.CTk):
         scroll = ctk.CTkScrollableFrame(parent, fg_color=CLR_BG)
         scroll.pack(fill="both", expand=True, padx=10, pady=10)
 
-        sec = self._section(scroll, "📄  Spreadsheet (XLSX)")
-        row = ctk.CTkFrame(sec, fg_color="transparent")
-        row.pack(fill="x", pady=4)
-        ctk.CTkEntry(row, textvariable=self.xlsx_path, width=480,
-                     fg_color=CLR_CARD, text_color=CLR_TEXT, border_color=CLR_ACCENT,
-                     placeholder_text="Path to .xlsx…").pack(side="left", padx=(0,8))
-        ctk.CTkButton(row, text="Browse…", width=90, fg_color=CLR_ACCENT,
-                      hover_color="#c73d52", command=self._browse_xlsx).pack(side="left")
-        ctk.CTkButton(row, text="Load", width=70, fg_color=CLR_CARD,
-                      hover_color=CLR_ACCENT, command=self._load_xlsx).pack(side="left", padx=8)
-
-        self._col_map_frame = self._section(scroll, "🗂  Column Mapping")
-        self._col_map_hint = ctk.CTkLabel(self._col_map_frame,
-            text="Load a spreadsheet first.", font=FONT_BODY, text_color=CLR_MUTED)
-        self._col_map_hint.pack(anchor="w")
+        sheets_sec = self._section(scroll, "📄  Spreadsheet (XLSX)")
+        ctk.CTkButton(sheets_sec, text="＋ Add File(s)…", width=140,
+                      fg_color=CLR_ACCENT, hover_color="#c73d52",
+                      command=self._add_xlsx_files).pack(anchor="w", pady=(0, 6))
+        self._sheets_container = ctk.CTkFrame(sheets_sec, fg_color="transparent")
+        self._sheets_container.pack(fill="x")
+        self._sheets_hint = ctk.CTkLabel(self._sheets_container,
+            text="No spreadsheets loaded yet.", font=FONT_BODY, text_color=CLR_MUTED)
+        self._sheets_hint.pack(anchor="w")
 
         sec2 = self._section(scroll, "🎵  AAF File")
         frow = ctk.CTkFrame(sec2, fg_color="transparent")
@@ -193,18 +186,134 @@ class App(ctk.CTk):
         ctk.CTkButton(frow, text="Browse…", width=90, fg_color=CLR_ACCENT,
                       hover_color="#c73d52", command=self._browse_aaf).pack(side="left")
 
+        sec3 = self._section(scroll, "📋  Session Text (optional)")
+        trow = ctk.CTkFrame(sec3, fg_color="transparent")
+        trow.pack(fill="x", pady=4)
+        ctk.CTkEntry(trow, textvariable=self.pt_session_path, width=480,
+                     fg_color=CLR_CARD, text_color=CLR_TEXT,
+                     placeholder_text="Pro Tools session text export (.txt) — auto-detected if omitted").pack(side="left", padx=(0,8))
+        ctk.CTkButton(trow, text="Browse…", width=90, fg_color=CLR_PANEL,
+                      hover_color=CLR_ACCENT,
+                      command=self._browse_pt_txt).pack(side="left")
+        self._pt_txt_status = ctk.CTkLabel(sec3, text="", font=FONT_SMALL,
+                                           text_color=CLR_MUTED)
+        self._pt_txt_status.pack(anchor="w", pady=(2, 0))
+
         ctk.CTkButton(scroll, text="Apply Settings & Load AAF  →",
                       fg_color=CLR_ACCENT, hover_color="#c73d52",
                       font=FONT_HEADING, height=42,
                       command=self._apply_setup).pack(pady=14, anchor="e", padx=4)
         self._setup_status = ctk.CTkLabel(scroll, text="", font=FONT_BODY, text_color=CLR_OK)
         self._setup_status.pack(anchor="w")
+    def _add_xlsx_files(self):
+        paths = filedialog.askopenfilenames(
+            filetypes=[("Excel", "*.xlsx *.xls"), ("All", "*.*")])
+        for p in paths:
+            if any(e["path"] == p for e in self.sheet_entries):
+                continue
+            self._add_sheet_entry(p)
 
-    def _browse_xlsx(self):
-        p = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xls"), ("All", "*.*")])
+    def _add_sheet_entry(self, path: str):
+        try:
+            data = SpreadsheetData(path)
+        except Exception as e:
+            messagebox.showerror("Load Error", f"{os.path.basename(path)}: {e}")
+            return
+        entry: Dict = {
+            "path": path,
+            "data": data,
+            "col_index":     tk.StringVar(),
+            "col_output":    tk.StringVar(),
+            "col_line_text": tk.StringVar(),
+            "col_character": tk.StringVar(value="(none)"),
+            "char_filter":   tk.StringVar(),
+            "expanded": True,
+        }
+        self.sheet_entries.append(entry)
+        self._sheets_hint.pack_forget()
+        self._build_sheet_card(entry)
+
+    def _build_sheet_card(self, entry: dict):
+        fname  = os.path.basename(entry["path"])
+        n_rows = len(entry["data"].df)
+
+        card = ctk.CTkFrame(self._sheets_container, fg_color=CLR_CARD, corner_radius=6)
+        card.pack(fill="x", pady=4)
+        entry["card"] = card
+
+        hdr = ctk.CTkFrame(card, fg_color="transparent")
+        hdr.pack(fill="x", padx=10, pady=6)
+
+        btn = ctk.CTkButton(hdr, text="▼", width=28, fg_color="transparent",
+                            hover_color=CLR_PANEL, text_color=CLR_TEXT,
+                            command=lambda e=entry: self._toggle_sheet_card(e))
+        btn.pack(side="left")
+        entry["toggle_btn"] = btn
+
+        ctk.CTkLabel(hdr, text=f"{fname}  ({n_rows} rows)", font=FONT_BODY,
+                     text_color=CLR_TEXT, anchor="w").pack(side="left", padx=8, fill="x", expand=True)
+        ctk.CTkButton(hdr, text="Remove", width=70, fg_color=CLR_PANEL,
+                      hover_color=CLR_ERR, text_color=CLR_TEXT,
+                      command=lambda e=entry: self._remove_sheet_entry(e)).pack(side="right")
+
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(fill="x", padx=10, pady=(0, 8))
+        entry["body"] = body
+        self._build_sheet_col_mapping(entry, body)
+
+    def _build_sheet_col_mapping(self, entry: dict, parent):
+        cols     = entry["data"].columns
+        opts_req = list(cols)
+        opts_opt = ["(none)"] + list(cols)
+
+        def _row(lbl, var, opts):
+            f = ctk.CTkFrame(parent, fg_color="transparent")
+            f.pack(fill="x", pady=2)
+            ctk.CTkLabel(f, text=lbl, font=FONT_BODY, width=190,
+                         text_color=CLR_TEXT, anchor="w").pack(side="left")
+            ctk.CTkOptionMenu(f, variable=var, values=opts,
+                              fg_color=CLR_PANEL, button_color=CLR_ACCENT,
+                              button_hover_color="#c73d52", text_color=CLR_TEXT,
+                              width=250).pack(side="left", padx=8)
+
+        _row("Index / order column:",    entry["col_index"],     opts_req)
+        _row("Output filename column:",  entry["col_output"],    opts_req)
+        _row("Line text column:",        entry["col_line_text"], opts_req)
+        _row("Character column (opt):",  entry["col_character"], opts_opt)
+
+        cf = ctk.CTkFrame(parent, fg_color="transparent")
+        cf.pack(fill="x", pady=2)
+        ctk.CTkLabel(cf, text="Filter to character:", font=FONT_BODY, width=190,
+                     text_color=CLR_TEXT, anchor="w").pack(side="left")
+        ctk.CTkEntry(cf, textvariable=entry["char_filter"], width=250,
+                     fg_color=CLR_PANEL, text_color=CLR_TEXT,
+                     placeholder_text="blank = all").pack(side="left", padx=8)
+
+        ctk.CTkLabel(parent, text="Preview:", font=FONT_SMALL,
+                     text_color=CLR_MUTED).pack(anchor="w", pady=(6, 2))
+        ctk.CTkLabel(parent, text=entry["data"].preview(3).to_string(index=False),
+                     font=FONT_MONO, text_color=CLR_MUTED, justify="left").pack(anchor="w")
+
+    def _toggle_sheet_card(self, entry: dict):
+        entry["expanded"] = not entry["expanded"]
+        if entry["expanded"]:
+            entry["body"].pack(fill="x", padx=10, pady=(0, 8))
+            entry["toggle_btn"].configure(text="▼")
+        else:
+            entry["body"].pack_forget()
+            entry["toggle_btn"].configure(text="▶")
+
+    def _remove_sheet_entry(self, entry: dict):
+        self.sheet_entries.remove(entry)
+        entry["card"].destroy()
+        if not self.sheet_entries:
+            self._sheets_hint.pack(anchor="w")
+
+    def _browse_pt_txt(self):
+        p = filedialog.askopenfilename(
+            filetypes=[("Text", "*.txt"), ("All", "*.*")])
         if p:
-            self.xlsx_path.set(p)
-            self._load_xlsx()
+            self.pt_session_path.set(p)
 
     def _browse_aaf(self):
         p = filedialog.askopenfilename(
@@ -212,71 +321,41 @@ class App(ctk.CTk):
         if p:
             self.aaf_path.set(p)
 
-    def _load_xlsx(self):
-        path = self.xlsx_path.get().strip()
-        if not path or not os.path.isfile(path):
-            messagebox.showerror("Error", "Select a valid XLSX file.")
-            return
-        try:
-            self.sheet_data = SpreadsheetData(path)
-            self._build_column_mapping()
-            self._setup_status.configure(
-                text=f"✓ {len(self.sheet_data.df)} rows, {len(self.sheet_data.columns)} columns",
-                text_color=CLR_OK)
-        except Exception as e:
-            messagebox.showerror("Load Error", str(e))
-
-    def _build_column_mapping(self):
-        for w in self._col_map_frame.winfo_children():
-            w.destroy()
-        cols = self.sheet_data.columns
-        opts_req = list(cols)
-        opts_opt = ["(none)"] + list(cols)
-
-        def _row(lbl, var, opts):
-            f = ctk.CTkFrame(self._col_map_frame, fg_color="transparent")
-            f.pack(fill="x", pady=3)
-            ctk.CTkLabel(f, text=lbl, font=FONT_BODY, width=190,
-                         text_color=CLR_TEXT, anchor="w").pack(side="left")
-            ctk.CTkOptionMenu(f, variable=var, values=opts,
-                              fg_color=CLR_CARD, button_color=CLR_ACCENT,
-                              button_hover_color="#c73d52", text_color=CLR_TEXT,
-                              width=250).pack(side="left", padx=8)
-
-        _row("Index / order column:", self.col_index, opts_req)
-        _row("Output filename column:", self.col_output, opts_req)
-        _row("Line text column:", self.col_line_text, opts_req)
-        _row("Character column (opt):", self.col_character, opts_opt)
-
-        cf = ctk.CTkFrame(self._col_map_frame, fg_color="transparent")
-        cf.pack(fill="x", pady=3)
-        ctk.CTkLabel(cf, text="Filter to character:", font=FONT_BODY, width=190,
-                     text_color=CLR_TEXT, anchor="w").pack(side="left")
-        ctk.CTkEntry(cf, textvariable=self.char_filter, width=250,
-                     fg_color=CLR_CARD, text_color=CLR_TEXT,
-                     placeholder_text="blank = all").pack(side="left", padx=8)
-
-        ctk.CTkLabel(self._col_map_frame, text="Preview:",
-                     font=FONT_SMALL, text_color=CLR_MUTED).pack(anchor="w", pady=(8,2))
-        ctk.CTkLabel(self._col_map_frame,
-                     text=self.sheet_data.preview(3).to_string(index=False),
-                     font=FONT_MONO, text_color=CLR_MUTED, justify="left").pack(anchor="w")
-
     def _apply_setup(self):
-        for var, name in [(self.col_index, "Index"), (self.col_output, "Output filename"),
-                          (self.col_line_text, "Line text")]:
-            if not var.get() or var.get() == "(none)":
-                messagebox.showerror("Missing", f"{name} column must be selected.")
-                return
-        if not self.sheet_data:
-            messagebox.showerror("Error", "Load a spreadsheet first.")
+        if not self.sheet_entries:
+            messagebox.showerror("Error", "Add at least one spreadsheet first.")
             return
-        char_col  = self.col_character.get() if self.col_character.get() != "(none)" else None
-        char_filt = self.char_filter.get().strip() or None
-        self.rows = self.sheet_data.get_rows(
-            index_col=self.col_index.get(), output_name_col=self.col_output.get(),
-            line_text_col=self.col_line_text.get(),
-            character_col=char_col, character_filter=char_filt)
+        for entry in self.sheet_entries:
+            fname = os.path.basename(entry["path"])
+            for var, name in [
+                (entry["col_index"],     "Index"),
+                (entry["col_output"],    "Output filename"),
+                (entry["col_line_text"], "Line text"),
+            ]:
+                if not var.get() or var.get() == "(none)":
+                    messagebox.showerror("Missing", f"{fname}: {name} column must be selected.")
+                    return
+
+        all_rows: List[Dict] = []
+        for entry in self.sheet_entries:
+            char_col  = entry["col_character"].get() if entry["col_character"].get() != "(none)" else None
+            char_filt = entry["char_filter"].get().strip() or None
+            rows = entry["data"].get_rows(
+                index_col=entry["col_index"].get(),
+                output_name_col=entry["col_output"].get(),
+                line_text_col=entry["col_line_text"].get(),
+                character_col=char_col,
+                character_filter=char_filt)
+            all_rows.extend(rows)
+
+        # Re-deduplicate across all files using base_index
+        seen: dict = {}
+        for r in all_rows:
+            base  = r["base_index"]
+            count = seen.get(base, 0)
+            seen[base] = count + 1
+            r["index"] = base if count == 0 else f"{base}#{count}"
+        self.rows = all_rows
 
         # ── Parse AAF ────────────────────────────────────────────────────────
         aaf_path = self.aaf_path.get().strip()
@@ -309,15 +388,40 @@ class App(ctk.CTk):
         if self.aaf_session.missing_media:
             self._try_locate_missing_media()
 
+        # ── Parse Pro Tools session TXT (optional) ───────────────────────────
+        txt_path = self.pt_session_path.get().strip()
+        if not txt_path:
+            # Auto-detect: .txt with same basename alongside the AAF
+            candidate = os.path.splitext(aaf_path)[0] + ".txt"
+            if os.path.isfile(candidate):
+                txt_path = candidate
+                self.pt_session_path.set(txt_path)
+
+        self.pt_session = None
+        if txt_path and os.path.isfile(txt_path):
+            try:
+                self.pt_session = parse_pt_session(txt_path)
+                n_num = len(self.pt_session.numeric_markers())
+                n_all = len(self.pt_session.markers)
+                self._pt_txt_status.configure(
+                    text=f"✓ {n_all} markers loaded · {n_num} numeric (line-number) markers",
+                    text_color=CLR_OK)
+            except Exception as e:
+                self._pt_txt_status.configure(
+                    text=f"⚠ Could not parse TXT: {e}", text_color=CLR_WARN)
+        else:
+            self._pt_txt_status.configure(text="", text_color=CLR_MUTED)
+
         self.transcripts      = {}
         self.word_data        = {}
         self.alignments       = {}
         self._combined_words  = []
         self._group_offsets   = {}
         self.skipped_rows     = set()
-        self._setup_status.configure(
-            text=f"✓ {len(self.rows)} rows · {len(self.aaf_session.tracks)} tracks",
-            text_color=CLR_OK)
+        status_txt = f"✓ {len(self.rows)} rows · {len(self.aaf_session.tracks)} tracks"
+        if self.pt_session:
+            status_txt += f" · {len(self.pt_session.numeric_markers())} markers"
+        self._setup_status.configure(text=status_txt, text_color=CLR_OK)
         self._refresh_tracks_tab()
         self._refresh_review_tab()
         self.tabs.set("2 · Tracks")
@@ -781,10 +885,16 @@ class App(ctk.CTk):
 
     def _alignment_group(self, ar: "AlignmentResult") -> Optional[str]:
         """
-        Return the gidx that owns this alignment by reading the _group tag
-        on the matched word in the combined (offset) word list.
-        This is O(1) and 100% reliable regardless of timestamp ranges.
+        Return the gidx that owns this alignment.
+
+        When alignment searched a specific group's word list (marker-guided),
+        ar.matched_group holds the group key directly.  For _all searches fall
+        back to reading the _group tag from the matched word in _combined_words.
         """
+        mg = getattr(ar, "matched_group", "")
+        if mg and mg != "_all":
+            return mg
+        # _all search: derive group from the word's _group tag
         combined = getattr(self, "_combined_words", None)
         if combined and ar.takes:
             wi = ar.word_start_i
@@ -1412,8 +1522,12 @@ class App(ctk.CTk):
         rows_snapshot       = list(self.rows)
         word_data_snapshot  = dict(self.word_data)
         display_groups_snap = list(self.display_groups)
+        pt_snap             = self.pt_session
+        aaf_snap            = self.aaf_session
+        roles_snap          = {k: v.get() for k, v in self.track_roles.items()}
 
         def _run():
+            import re as _re
             # Offset each group's timestamps by a large per-group delta so
             # words from different files don't share the same time range.
             # This makes source_offset globally unique across groups, which
@@ -1421,25 +1535,80 @@ class App(ctk.CTk):
             OFFSET_STEP = 100_000.0   # 100 000 s gap — far beyond any real file
             all_words   = []
             group_offsets: Dict[str, float] = {}
+            per_group_words: Dict[str, List[Dict]] = {}
 
             for i, (gidx, words) in enumerate(word_data_snapshot.items()):
                 offset = i * OFFSET_STEP
                 group_offsets[gidx] = offset
+                grp_list: List[Dict] = []
                 for wd in words:
                     tagged = dict(wd)
                     tagged["start"]  = wd["start"]  + offset
                     tagged["end"]    = wd["end"]    + offset
                     tagged["_group"] = gidx
                     all_words.append(tagged)
+                    grp_list.append(tagged)
+                per_group_words[gidx] = grp_list
 
             all_words.sort(key=lambda w: w["start"])
 
-            COMBINED     = "_all"
-            row_to_group = {row["index"]: COMBINED for row in rows_snapshot}
+            # Build group_word_map: _all for fallback + per-group entries for
+            # marker-guided search.
+            COMBINED = "_all"
+            group_word_map: Dict[str, List[Dict]] = {COMBINED: all_words}
+            group_word_map.update(per_group_words)
+
+            # ── Marker-guided row→group assignment ────────────────────────
+            # When a PT session TXT is loaded, numeric marker names (e.g. "22")
+            # match the numeric suffix of spreadsheet index values (e.g. "R22").
+            # Find which AAF 4060 clip covers each marker's session time, then
+            # assign that row to the corresponding display group so the aligner
+            # searches only that file's transcript.
+
+            numeric_markers_snap: Dict[str, List] = (
+                pt_snap.numeric_markers() if pt_snap else {}
+            )
+
+            def _marker_gidx_hint(base_idx: str) -> Optional[str]:
+                if not numeric_markers_snap or not aaf_snap:
+                    return None
+                nums = _re.findall(r'\d+', base_idx)
+                if not nums:
+                    return None
+                # Use the last numeric group; strip leading zeros
+                num_str = nums[-1].lstrip('0') or '0'
+                mks = numeric_markers_snap.get(num_str, [])
+                if not mks:
+                    return None
+                candidate_gidxs: set = set()
+                for mk in mks:
+                    session_t = mk.time_sec
+                    for track in aaf_snap.tracks:
+                        if roles_snap.get(track.name, "unknown") != "4060":
+                            continue
+                        for clip in track.clips:
+                            if clip.timeline_pos <= session_t < clip.timeline_pos + clip.duration:
+                                if clip.source_file:
+                                    for grp in display_groups_snap:
+                                        if grp.get("4060_path") == clip.source_file:
+                                            candidate_gidxs.add(grp["index"])
+                # Only use the hint if all markers agree on one group
+                if len(candidate_gidxs) == 1:
+                    return next(iter(candidate_gidxs))
+                return None
+
+            row_to_group: Dict[str, str] = {}
+            for row in rows_snapshot:
+                hinted = _marker_gidx_hint(row.get("base_index", row["index"]))
+                # Only use the hint if that group has transcription data
+                if hinted and hinted in per_group_words:
+                    row_to_group[row["index"]] = hinted
+                else:
+                    row_to_group[row["index"]] = COMBINED
 
             results = align_all(
                 rows=rows_snapshot,
-                group_word_map={COMBINED: all_words},
+                group_word_map=group_word_map,
                 row_to_group=row_to_group,
             )
 

@@ -79,6 +79,10 @@ class AlignmentResult:
     # Remain 0.0 when operating in folder mode (no AAF).
     session_time_start: float = 0.0
     session_time_end:   float = 0.0
+    # Key used in group_word_map for this alignment's search.
+    # Non-empty and not "_all" → alignment searched a specific group's words
+    # and _alignment_group() can return this directly without a word-index lookup.
+    matched_group: str = ""
 
 
 # ── Text helpers ──────────────────────────────────────────────────────────────
@@ -288,6 +292,7 @@ def align_all(
             ratio=best_ratio,
             needs_review=(conf <= 2),
             take_count=len(takes),
+            matched_group=gidx or "",
         ))
 
     return results

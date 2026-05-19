@@ -29,7 +29,11 @@
       "Bash(ls -la \"h:\\\\Coding\\\\TNM_SessionBuilder\\\\\" | head -20)",
       "Read(//h/Coding/**)",
       "Bash(py -3.12 -c \"import ast; ast.parse\\(open\\('h:/Coding/TNM_SessionBuilder/app/gui.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
-      "Bash(py -3.12 -c \"import ast; ast.parse\\(open\\('h:/Coding/TNM_SessionBuilder/app/gui.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
+      "Bash(py -3.12 -c \"import ast; ast.parse\\(open\\('h:/Coding/TNM_SessionBuilder/app/gui.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(py -3.12 -m py_compile app/gui.py)",
+      "Bash(py -3.12 -c \"from app.pt_session_parser import parse_pt_session, PTSession; print\\('pt_session_parser OK'\\)\")",
+      "Bash(py -3.12 -c \"from app.aligner import AlignmentResult, align_all; print\\('aligner OK'\\); ar = AlignmentResult\\(row_index='R1', output_name='x', line_text='y', matched_text='z'\\); print\\('matched_group default:', repr\\(ar.matched_group\\)\\)\")",
+      "Bash(py -3.12 -c \"import app.gui; print\\('gui OK'\\)\")"
     ]
   }
 }
