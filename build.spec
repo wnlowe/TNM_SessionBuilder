@@ -11,6 +11,7 @@ block_cipher = None
 # ── Collect data files that PyInstaller misses by default ─────────────────────
 
 whisper_datas = collect_data_files('whisper')
+certifi_datas = collect_data_files('certifi')
 customtkinter_datas = collect_data_files('customtkinter')
 # openpyxl bundles XML schemas/templates that pandas.read_excel loads at runtime.
 openpyxl_datas = collect_data_files('openpyxl')
@@ -50,7 +51,8 @@ if os.path.exists('assets/icon.png'):
     icon_datas.append(('assets/icon.png', 'assets'))
 
 all_datas = (whisper_datas + customtkinter_datas + jaraco_datas
-             + openpyxl_datas + tiktoken_datas + aaf2_datas + icon_datas)
+             + openpyxl_datas + tiktoken_datas + aaf2_datas + icon_datas
+             + certifi_datas)
 
 # ── Hidden imports that PyInstaller can't auto-detect ─────────────────────────
 
@@ -83,6 +85,7 @@ hidden = [
     'jaraco.collections',
     'platformdirs',
     'more_itertools',
+    'certifi',
 ]
 
 hidden += collect_submodules('whisper')

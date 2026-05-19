@@ -8,6 +8,15 @@ import sys
 import os
 import multiprocessing
 
+# macOS Python (python.org installer and PyInstaller bundles) does not trust
+# the system keychain for HTTPS, so urllib fails with SSL_CERTIFICATE_VERIFY_FAILED.
+# Patching _create_default_https_context with certifi's CA bundle fixes this for
+# all urllib-based downloads (including whisper.load_model → torch.hub).
+if sys.platform == 'darwin':
+    import ssl
+    import certifi
+    ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
+
 if getattr(sys, 'frozen', False):
     # Required on Windows so PyTorch worker-process spawns re-enter the
     # freeze bootstrap rather than re-launching the GUI.
